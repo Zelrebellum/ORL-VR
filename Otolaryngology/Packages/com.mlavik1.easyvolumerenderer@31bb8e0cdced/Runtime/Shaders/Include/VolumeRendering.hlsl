@@ -30,6 +30,17 @@ float _LightingGradientThresholdEnd;
 
 float _SamplingRateMultiplier;
 
+
+// Values supplied by ShaderTests through the volume's material.  --------------------------------------------------------------------------------------------------------------------------------------
+// Four numbers describing the drill: xyz = world-space center, w = radius.
+float4 _DrillSpherrWorldPos;
+
+// Converts a position in the volume container's local space into world space.
+float4x4 _VolumeLocalToWorld;
+
+// Cutting switch: shader test sends 1 when cutting is allowed, otherwise 0.
+float _DrillEnabled;
+
 #if CROSS_SECTION_ON
 #include "VolumeCutout.cginc"
 #else
@@ -38,6 +49,36 @@ bool IsCutout(float3 currPos)
     return false;
 }
 #endif
+
+// Check whether one volume sample lies inside the active drill sphere. ------------------------------------------------------------------------------------------------------------------------------------
+bool IsInsideDrill(float3 texturePosition)
+{
+    // C# sends either 0 or 1. A value not equal to 1 means cutting is off,
+    if (_DrillEnabled != 1)
+        return false;
+
+    // Texture coordinates run from 0 to 1 along each axis.
+    // This plugin renders the volume inside a local cube from -0.5 to 0.5.
+    float3 localPosition =
+        texturePosition - float3(0.5, 0.5, 0.5);
+
+    // Get the world-space position in xyz
+    float3 worldPosition = mul(
+        _VolumeLocalToWorld,
+        float4(localPosition, 1.0)
+    ).xyz;
+
+    // Both positions are now in world space, so subtracting them gives
+    // the offset from the drill center to this sample.
+    float3 offset =
+        worldPosition - _DrillSpherrWorldPos.xyz;
+
+    // Get the world-space radius in w.
+    float radius = _DrillSpherrWorldPos.w;
+
+    // Check whether the distance from the sample point to the drill sphere’s center is less than or equal to its radius. If so, return true.
+    return dot(offset, offset) <= radius * radius;
+}
 
 struct RayInfo
 {
@@ -53,6 +94,12 @@ struct RaymarchInfo
     int numSteps;
     float numStepsRecip;
     float stepSize;
+};
+
+struct PointDrill
+{
+    float3 pos;
+    bool beenDrilled;
 };
 
 float3 getViewRayDir(float3 vertexLocal)
@@ -250,25 +297,44 @@ volrend_result volrend_dvr(float3 vertexLocal, float2 uv)
 
     float4 col = float4(0.0f, 0.0f, 0.0f, 0.0f);
     float tDepth = raymarchInfo.numStepsRecip * (raymarchInfo.numSteps - 1);
+    
     for (int iStep = 0; iStep < raymarchInfo.numSteps; iStep++)
     {
         const float t = iStep * raymarchInfo.numStepsRecip;
-        const float3 currPos = lerp(ray.startPos, ray.endPos, t);
+        PointDrill currentPos;
+        currentPos.pos = lerp(ray.startPos, ray.endPos, t);
+        //const float3 currPos = lerp(ray.startPos, ray.endPos, t);
+
+        // Check the current point is inside the drill or not before reading its density or adding its color.  ---------------------------------------------------------------------------------------------------------------------
+        if (IsInsideDrill(currentPos.pos))
+        {
+            currentPos.beenDrilled = true;
+            // Skip this sample so it adds no color or opacity to the image.
+            continue;
+        }
+        if (currentPos.beenDrilled)
+        {
+            continue;
+        }
+        //if (all(currPos == drilled[iStep]))
+        //{
+        //    continue;
+        //}
 
         // Perform slice culling (cross section plane)
 #ifdef CROSS_SECTION_ON
-        if(IsCutout(currPos))
+        if(IsCutout(currentPos.pos))
             continue;
 #endif
 
 #if CUBIC_INTERPOLATION_ON && !defined(MULTIVOLUME_OVERLAY) && !defined(MULTIVOLUME_ISOLATE)
         // Optimisation: First get density without tricubic interpolation, before doing an early return
-        if (getTF1DColour(getDensityNoTricubic(currPos)).a == 0.0)
+        if (getTF1DColour(getDensityNoTricubic(currentPos.pos)).a == 0.0)
             continue;
 #endif
 
         // Get the dansity/sample value of the current position
-        const float density = getDensity(currPos);
+        const float density = getDensity(currentPos.pos);
 
         // Apply visibility window
         if (density < _MinVal || density > _MaxVal) continue;
@@ -282,7 +348,7 @@ volrend_result volrend_dvr(float3 vertexLocal, float2 uv)
 #endif
 
 #if defined(MULTIVOLUME_OVERLAY) || defined(MULTIVOLUME_ISOLATE)
-        const float secondaryDensity = getSecondaryDensity(currPos);
+        const float secondaryDensity = getSecondaryDensity(currentPos.pos);
         float4 secondaryColour = getSecondaryTF1DColour(secondaryDensity);
 #if MULTIVOLUME_OVERLAY
         src = secondaryColour.a > 0.0 ? secondaryColour : src;
@@ -294,7 +360,7 @@ volrend_result volrend_dvr(float3 vertexLocal, float2 uv)
 
         // Calculate gradient (needed for lighting and 2D transfer functions)
 #if defined(TF2D_ON) || defined(LIGHTING_ON)
-        float3 gradient = getGradient(currPos);
+        float3 gradient = getGradient(currentPos.pos);
         float gradMag = length(gradient);
 
         float gradMagNorm = gradMag / 1.75f;
@@ -313,7 +379,7 @@ volrend_result volrend_dvr(float3 vertexLocal, float2 uv)
         float3 shaded = calculateLighting(src.rgb, gradient / gradMag, getLightDirection(-ray.direction), -ray.direction, 0.3f);
         src.rgb = lerp(src.rgb, shaded, factor);
 #if defined(SHADOWS_ON)
-        float shadow = calculateShadow(currPos, getLightDirection(-ray.direction));
+        float shadow = calculateShadow(currentPos.pos, getLightDirection(-ray.direction));
         src.rgb *= (1.0f - shadow);
 #endif
 #endif

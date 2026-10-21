@@ -124,7 +124,7 @@ expandedQueries = [
 ]
 queryBuilder = false
 ignoredProperties = "id;name;classname;imagecontentshash"
-helperWidgetCurrentArea = "p:"
+helperWidgetCurrentArea = "all"
 disabledIndexers = ""
 minIndexVariations = 2
 findProviderIndexHelper = true
