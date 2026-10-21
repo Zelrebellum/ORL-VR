@@ -316,10 +316,6 @@ volrend_result volrend_dvr(float3 vertexLocal, float2 uv)
         {
             continue;
         }
-        //if (all(currPos == drilled[iStep]))
-        //{
-        //    continue;
-        //}
 
         // Perform slice culling (cross section plane)
 #ifdef CROSS_SECTION_ON

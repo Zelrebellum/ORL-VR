@@ -120,16 +120,16 @@ public class ShaderTests : MonoBehaviour
     }
 
     // Clear the material's cutting switch when this component is disabled. ----------------------------------------------------------
-    void OnDisable()
-    {
-        if (volume == null || volume.meshRenderer == null)
-            return;
+    //void OnDisable()
+    //{
+    //    if (volume == null || volume.meshRenderer == null)
+    //        return;
 
-        Material material = volume.meshRenderer.sharedMaterial;
+    //    Material material = volume.meshRenderer.sharedMaterial;
 
-        if (material != null)
-            material.SetFloat("_DrillEnabled", 0f);
-    }
+    //    if (material != null)
+    //        material.SetFloat("_DrillEnabled", 0f);
+    //}
 
 
     /// Requests that cutting start or stop. ---------------------------------------------------------------------------------------------
