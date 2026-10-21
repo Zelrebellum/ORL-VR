@@ -15,7 +15,7 @@ namespace UnityVolumeRendering
         static void OnLoad()
         {
             // Scene view
-            DragAndDrop.AddDropHandler(OnSceneDrop);
+            DragAndDrop.AddDropHandlerV2(OnSceneDrop);
             // Scene hierarchy
             DragAndDrop.AddDropHandler(OnHierarchyDrop);
             // Project browser
