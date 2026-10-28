@@ -19,6 +19,8 @@ Texture3D _ShadowVolume;      SamplerState sampler_ShadowVolume;
 Texture3D _SecondaryDataTex;  SamplerState sampler_SecondaryDataTex;
 Texture2D _SecondaryTFTex;    SamplerState sampler_SecondaryTFTex;
 
+Texture3D _VolumeMask;        SamplerState sampler_VolumeMask;
+
 float _MinVal;
 float _MaxVal;
 float3 _TextureSize;
@@ -78,6 +80,21 @@ bool IsInsideDrill(float3 texturePosition)
 
     // Check whether the distance from the sample point to the drill sphere’s center is less than or equal to its radius. If so, return true.
     return dot(offset, offset) <= radius * radius;
+}
+
+bool BeenDrilled(float3 texturePosition)
+{
+    //checks the r value of the mask to see if it has been drilled
+    float maskValue = _VolumeMask.Sample(sampler_VolumeMask, texturePosition).r;
+    
+    //return true if maskvalue isnt 1 -> means it has been drilled
+    return (!maskValue);
+    
+}
+void Drill(float3 texturePosition)
+{
+    //Attempts to update the r value DOES NOT WORK BREAKS SHADER
+    _VolumeMask.Sample(sampler_VolumeMask, texturePosition).r = 0;
 }
 
 struct RayInfo
@@ -298,7 +315,7 @@ volrend_result volrend_dvr(float3 vertexLocal, float2 uv)
     float4 col = float4(0.0f, 0.0f, 0.0f, 0.0f);
     float tDepth = raymarchInfo.numStepsRecip * (raymarchInfo.numSteps - 1);
     
-    for (int iStep = 0; iStep < raymarchInfo.numSteps; iStep++)
+    [loop]for (int iStep = 0; iStep < raymarchInfo.numSteps; iStep++)
     {
         const float t = iStep * raymarchInfo.numStepsRecip;
         PointDrill currentPos;
@@ -308,15 +325,18 @@ volrend_result volrend_dvr(float3 vertexLocal, float2 uv)
         // Check the current point is inside the drill or not before reading its density or adding its color.  ---------------------------------------------------------------------------------------------------------------------
         if (IsInsideDrill(currentPos.pos))
         {
-            currentPos.beenDrilled = true;
+            Drill(currentPos.pos);
             // Skip this sample so it adds no color or opacity to the image.
             continue;
         }
-        if (currentPos.beenDrilled)
+        if (BeenDrilled(currentPos.pos))
         {
+            //dont render if this position has been drilled
             continue;
         }
 
+        
+        
         // Perform slice culling (cross section plane)
 #ifdef CROSS_SECTION_ON
         if(IsCutout(currentPos.pos))

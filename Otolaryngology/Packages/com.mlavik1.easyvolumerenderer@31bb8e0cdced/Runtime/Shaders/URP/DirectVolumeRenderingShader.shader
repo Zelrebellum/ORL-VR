@@ -16,7 +16,7 @@
         _SecondaryDataTex ("Secondary Data Texture (Generated)", 3D) = "" {}
         _SecondaryTFTex("Transfer Function Texture for secondary volume", 2D) = "" {}
         [HideInInspector] _ShadowVolumeTextureSize("Shadow volume dimensions", Vector) = (1, 1, 1)
-        [HideInInspector] _TextureSize("Dataset dimensions", Vector) = (1, 1, 1)
+        /*[HideInInspector]*/ _TextureSize("Dataset dimensions", Vector) = (1, 1, 1)
 
         // ShaderTests.cs sends the drill sphere as four numbers "_DrillSpherrWorldPos" -----------------------------------------------------------------------------------------------------------
         // x, y, z are the center in world coordinates; w is the world-space radius.
@@ -26,6 +26,8 @@
         // ShaderTests.cs sets this to 1 when cutting is allowed and 0 when it is off. ------------------------------------------------------------------------------------------------------------
         //[HideInInspector]
         _DrillEnabled("Drill Enabled", Float) = 0   
+
+        _VolumeMask("3D Texture", 3D) = "white"{}
 }
     SubShader
     {

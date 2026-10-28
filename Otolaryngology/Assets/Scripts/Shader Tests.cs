@@ -1,4 +1,5 @@
-﻿using UnityEngine;
+﻿using System;
+using UnityEngine;
 using UnityVolumeRendering;
 
 /// <summary>
@@ -20,15 +21,30 @@ public class ShaderTests : MonoBehaviour
     [SerializeField]
     private bool drillRunning = false;
 
+    [SerializeField] ComputeShader computeShader;
+    private int kernelHandle;
+
+    RenderTexture texture;
+
+    Color[] colors;
+
     //public Renderer myRenderer; 
 
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
         //myRenderer = GetComponent<Renderer>();
+        texture = new RenderTexture(418,367,391,RenderTextureFormat.R8);
+        texture.filterMode = FilterMode.Point;
+        texture.wrapMode = TextureWrapMode.Clamp;
+        texture.enableRandomWrite = true;
+        texture.Create();
+
+        kernelHandle = computeShader.FindKernel("CSMain");
+        computeShader.SetTexture(kernelHandle,"ResultTexture",texture);
+        computeShader.SetFloats("baseColor", new float[] {1, 0, 0, 0});
+
     }
-
-
     // Each frame, check that the volume, its material, and the drill collider ----------------------------------------------------------
     // are available, then tell the shader whether cutting is allowed.
     //
@@ -65,11 +81,16 @@ public class ShaderTests : MonoBehaviour
             return;
         //}
 
+        //Debug.Log(texture == null);
+        material.SetTexture("_VolumeMask", texture);
+        //Debug.Log((texture.GetPixels(0))[0].r);
+
         // safe check: All conditions must be true before cutting is allowed:
         bool canCut = drillRunning && drillSphere != null && drillSphere.enabled && drillSphere.gameObject.activeInHierarchy && volume.volumeContainerObject != null;
 
         // Send 1 for enabled and 0 for disabled. The HLSL will checks this value
         material.SetFloat("_DrillEnabled", canCut ? 1f : 0f);
+
 
         // Safe check
         if (!canCut)
