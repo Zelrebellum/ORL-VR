@@ -1,15 +1,67 @@
-// Each #kernel tells which function to compile; you can have many kernels
-#pragma kernel CSMain
+// Split initialization from cutting. C# runs ClearMask once at startup
+// (or on explicit reset), and runs DrillMask while the drill is switched on.
+// Each #kernel tells which function to compile; you can have many kernels.
+#pragma kernel ClearMask
+#pragma kernel DrillMask
 
-// Create a RenderTexture with enableRandomWrite flag and set it
-// with cs.SetTexture
-RWTexture3D<float4> ResultTexture;
+// Do not include VolumeRendering.hlsl here. Compute does not need the
+// camera, raymarching, lighting, or fragment functions from the rendering code.
 
-float4 baseColor;
+// One float per cell, matching RenderTextureFormat.RFloat in C#.
+// This is the writable view of the SAME texture that rendering reads as
+// _VolumeMask. 
+RWTexture3D<float> ResultTexture;
 
-[numthreads(8,8,8)]
-void CSMain (uint3 id : SV_DispatchThreadID)
+// C# sends the actual width, height and number of depth slices.
+int3 _MaskSize;
+
+// These inputs now belong to compute shader, not the render shader.
+float4 _DrillSpherrWorldPos;
+// Converts a position in the volume container's local space into world space.
+float4x4 _VolumeLocalToWorld;
+
+[numthreads(8, 8, 8)]
+void ClearMask(uint3 id : SV_DispatchThreadID)
 {
-    //apply default
-    ResultTexture[id] = baseColor;
+    // Dispatch rounds up to full groups. Edge groups may contain threads
+    // outside the texture; those threads must exit before accessing storage.
+    if (any(id >= (uint3) _MaskSize))
+        return;
+
+    // Explicit initialization: 1 = keep this cell visible.
+    // A RenderTexture's initial contents must not be assumed to be white.
+    ResultTexture[id] = 1.0;
+}
+
+[numthreads(8, 8, 8)]
+void DrillMask(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id >= (uint3) _MaskSize))
+        return;
+
+    // Each thread owns a fixed mask cell. Compute does not need sample
+    // positions from the camera's render shader: it reconstructs cell positions.
+    // +0.5 selects the cell CENTER, rather than its lower corner.
+    float3 texturePosition = ((float3) id + 0.5) / (float3) _MaskSize;
+
+    // The plugin's texture coordinates span [0, 1], while its volume container is a unit cube centered at the origin, spanning [-0.5, 0.5].
+    // Texture coordinates run from 0 to 1 along each axis.
+    // This plugin renders the volume inside a local cube from -0.5 to 0.5.
+    float3 localPosition = texturePosition - 0.5;
+
+    // Get the world-space position in xyz.
+    float3 worldPosition = mul(_VolumeLocalToWorld, float4(localPosition, 1.0)).xyz;
+
+    // The sphere test previously in VolumeRendering.hlsl now runs here.
+    float3 offset = worldPosition - _DrillSpherrWorldPos.xyz;
+
+    // Get the world-space radius in w.
+    float radius = _DrillSpherrWorldPos.w;
+    
+    // Check whether the distance from the sample point to the drill sphere's center is less than or equal to its radius. If so, mark the cell as removed.
+    if (dot(offset, offset) <= radius * radius)
+    {
+        // Write to a real integer cell address, not to a Sample() result.
+        ResultTexture[id] = 0.0;
+    }
 }

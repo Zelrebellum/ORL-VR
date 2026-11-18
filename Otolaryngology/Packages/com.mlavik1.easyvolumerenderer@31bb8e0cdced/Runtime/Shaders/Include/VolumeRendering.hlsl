@@ -11,15 +11,30 @@ struct volrend_result
     float depth;
 };
 
-Texture3D _DataTex;           SamplerState sampler_DataTex;
-Texture3D _GradientTex;       SamplerState sampler_GradientTex;
-Texture2D _NoiseTex;          SamplerState sampler_NoiseTex;
-Texture2D _TFTex;             SamplerState sampler_TFTex;
-Texture3D _ShadowVolume;      SamplerState sampler_ShadowVolume;
-Texture3D _SecondaryDataTex;  SamplerState sampler_SecondaryDataTex;
-Texture2D _SecondaryTFTex;    SamplerState sampler_SecondaryTFTex;
+Texture3D _DataTex;
+SamplerState sampler_DataTex;
+Texture3D _GradientTex;
+SamplerState sampler_GradientTex;
+Texture2D _NoiseTex;
+SamplerState sampler_NoiseTex;
+Texture2D _TFTex;
+SamplerState sampler_TFTex;
+Texture3D _ShadowVolume;
+SamplerState sampler_ShadowVolume;
+Texture3D _SecondaryDataTex;
+SamplerState sampler_SecondaryDataTex;
+Texture2D _SecondaryTFTex;
+SamplerState sampler_SecondaryTFTex;
 
-Texture3D _VolumeMask;        SamplerState sampler_VolumeMask;
+// Rendering has a read-only view of the persistent mask. Drilling.compute
+// writes the same texture through its RWTexture3D<float> named ResultTexture.
+// Never assign to Sample() or SampleLevel(): they return values, not storage.
+Texture3D _VolumeMask;
+SamplerState sampler_VolumeMask;
+
+// This means "an initialized mask is bound", NOT "the drill is running".
+// Once bound, old holes remain visible even when new cutting is switched off.
+float _VolumeMaskEnabled;
 
 float _MinVal;
 float _MaxVal;
@@ -33,15 +48,8 @@ float _LightingGradientThresholdEnd;
 float _SamplingRateMultiplier;
 
 
-// Values supplied by ShaderTests through the volume's material.  --------------------------------------------------------------------------------------------------------------------------------------
-// Four numbers describing the drill: xyz = world-space center, w = radius.
-float4 _DrillSpherrWorldPos;
-
-// Converts a position in the volume container's local space into world space.
-float4x4 _VolumeLocalToWorld;
-
-// Cutting switch: shader test sends 1 when cutting is allowed, otherwise 0.
-float _DrillEnabled;
+// Drill sphere and matrix uniforms moved to Drilling.compute.
+// This rendering file only needs the saved mask, not the current drill pose.
 
 #if CROSS_SECTION_ON
 #include "VolumeCutout.cginc"
@@ -52,49 +60,23 @@ bool IsCutout(float3 currPos)
 }
 #endif
 
-// Check whether one volume sample lies inside the active drill sphere. ------------------------------------------------------------------------------------------------------------------------------------
-bool IsInsideDrill(float3 texturePosition)
-{
-    // C# sends either 0 or 1. A value not equal to 1 means cutting is off,
-    if (_DrillEnabled != 1)
-        return false;
-
-    // Texture coordinates run from 0 to 1 along each axis.
-    // This plugin renders the volume inside a local cube from -0.5 to 0.5.
-    float3 localPosition =
-        texturePosition - float3(0.5, 0.5, 0.5);
-
-    // Get the world-space position in xyz
-    float3 worldPosition = mul(
-        _VolumeLocalToWorld,
-        float4(localPosition, 1.0)
-    ).xyz;
-
-    // Both positions are now in world space, so subtracting them gives
-    // the offset from the drill center to this sample.
-    float3 offset =
-        worldPosition - _DrillSpherrWorldPos.xyz;
-
-    // Get the world-space radius in w.
-    float radius = _DrillSpherrWorldPos.w;
-
-    // Check whether the distance from the sample point to the drill sphere’s center is less than or equal to its radius. If so, return true.
-    return dot(offset, offset) <= radius * radius;
-}
-
+// Replaces the old IsInsideDrill(), Drill(), and mask-read functions.
+// Rendering asks whether a position was removed; it never changes that answer.
 bool BeenDrilled(float3 texturePosition)
 {
-    //checks the r value of the mask to see if it has been drilled
-    float maskValue = _VolumeMask.Sample(sampler_VolumeMask, texturePosition).r;
-    
-    //return true if maskvalue isnt 1 -> means it has been drilled
-    return (!maskValue);
-    
-}
-void Drill(float3 texturePosition)
-{
-    //Attempts to update the r value DOES NOT WORK BREAKS SHADER
-    _VolumeMask.Sample(sampler_VolumeMask, texturePosition).r = 0;
+    // Default to normal rendering before C# has initialized and bound
+    // a mask. The "white" ShaderLab default does not initialize a RenderTexture.
+    if (_VolumeMaskEnabled < 0.5)
+        return false;
+
+    // Read mip 0 explicitly inside the raymarch loop. Point filtering is
+    // set in C#, so each sample reads one cell's stored value without blending.
+    // Check the r value of the mask to see if this position has been drilled.
+    float maskValue = _VolumeMask.SampleLevel(
+        sampler_VolumeMask, texturePosition, 0).r;
+
+    // State the meaning explicitly: 0 = removed; 1 = retained.
+    return maskValue < 0.5;
 }
 
 struct RayInfo
@@ -113,15 +95,11 @@ struct RaymarchInfo
     float stepSize;
 };
 
-struct PointDrill
-{
-    float3 pos;
-    bool beenDrilled;
-};
+// Removed PointDrill: a temporary struct does not store history across frames.
 
 float3 getViewRayDir(float3 vertexLocal)
 {
-    if(unity_OrthoParams.w == 0)
+    if (unity_OrthoParams.w == 0)
     {
         // Perspective
         return normalize(ObjSpaceViewDir(float4(vertexLocal, 0.0f)));
@@ -129,7 +107,7 @@ float3 getViewRayDir(float3 vertexLocal)
     else
     {
         // Orthographic
-        float3 camfwd = mul((float3x3)UVR_MATRIX_CAMERA_TO_WORLD, float3(0,0,-1));
+        float3 camfwd = mul((float3x3) UVR_MATRIX_CAMERA_TO_WORLD, float3(0, 0, -1));
         float4 camfwdobjspace = mul(UVR_MATRIX_WORLD_TO_OBJECT, camfwd);
         return normalize(camfwdobjspace);
     }
@@ -159,7 +137,7 @@ RayInfo getRayBack2Front(float3 vertexLocal)
     // Check if camera is inside AABB
     const float3 farPos = ray.startPos + ray.direction * ray.aabbInters.y - float3(0.5f, 0.5f, 0.5f);
     float4 clipPos = UnityObjectToClipPos(float4(farPos, 1.0f));
-    if(unity_OrthoParams.w == 0)
+    if (unity_OrthoParams.w == 0)
     {
         float3 viewDir = ObjSpaceViewDir(float4(vertexLocal, 0.0f));
         float viewDist = length(viewDir);
@@ -187,8 +165,8 @@ RayInfo getRayFront2Back(float3 vertexLocal)
 RaymarchInfo initRaymarch(RayInfo ray, int maxNumSteps)
 {
     RaymarchInfo raymarchInfo;
-    raymarchInfo.stepSize = 1.732f/*greatest distance in box*/ / maxNumSteps;
-    raymarchInfo.numSteps = (int)clamp(abs(ray.aabbInters.x - ray.aabbInters.y) / raymarchInfo.stepSize, 1, maxNumSteps);
+    raymarchInfo.stepSize = 1.732f /*greatest distance in box*/ / maxNumSteps;
+    raymarchInfo.numSteps = (int) clamp(abs(ray.aabbInters.x - ray.aabbInters.y) / raymarchInfo.stepSize, 1, maxNumSteps);
     raymarchInfo.numStepsRecip = 1.0 / raymarchInfo.numSteps;
     return raymarchInfo;
 }
@@ -265,7 +243,7 @@ float3 calculateLighting(float3 col, float3 normal, float3 lightDir, float3 eyeD
     float3 ambient = AMBIENT_LIGHTING_FACTOR * col;
     float3 v = eyeDir;
     float3 r = normalize(reflect(-lightDir, normal));
-    float rdotv = max( dot( r, v ), 0.0 );
+    float rdotv = max(dot(r, v), 0.0);
     float3 specular = pow(rdotv, 32.0f) * float3(1.0f, 1.0f, 1.0f) * specularIntensity;
     float3 result = diffuse + ambient + specular;
     return float3(min(result.r, 1.0f), min(result.g, 1.0f), min(result.b, 1.0f));
@@ -300,9 +278,9 @@ float localToDepth(float3 localPos)
 // Direct Volume Rendering
 volrend_result volrend_dvr(float3 vertexLocal, float2 uv)
 {
-    #define MAX_NUM_STEPS 512
-    #define OPACITY_THRESHOLD (1.0 - 1.0 / 255.0)
-    const int samplingRate = (int)(MAX_NUM_STEPS * _SamplingRateMultiplier);
+#define MAX_NUM_STEPS 512
+#define OPACITY_THRESHOLD (1.0 - 1.0 / 255.0)
+    const int samplingRate = (int) (MAX_NUM_STEPS * _SamplingRateMultiplier);
 
     RayInfo ray = getRayFront2Back(vertexLocal);
     RaymarchInfo raymarchInfo = initRaymarch(ray, samplingRate);
@@ -315,45 +293,39 @@ volrend_result volrend_dvr(float3 vertexLocal, float2 uv)
     float4 col = float4(0.0f, 0.0f, 0.0f, 0.0f);
     float tDepth = raymarchInfo.numStepsRecip * (raymarchInfo.numSteps - 1);
     
-    [loop]for (int iStep = 0; iStep < raymarchInfo.numSteps; iStep++)
+    [loop]
+    for (int iStep = 0; iStep < raymarchInfo.numSteps; iStep++)
     {
         const float t = iStep * raymarchInfo.numStepsRecip;
-        PointDrill currentPos;
-        currentPos.pos = lerp(ray.startPos, ray.endPos, t);
-        //const float3 currPos = lerp(ray.startPos, ray.endPos, t);
+        // [FIX] A render sample is temporary; its drilling history is stored in
+        // the mask. Replace the old PointDrill object with this plain position.
+        const float3 currPos = lerp(ray.startPos, ray.endPos, t);
 
-        // Check the current point is inside the drill or not before reading its density or adding its color.  ---------------------------------------------------------------------------------------------------------------------
-        if (IsInsideDrill(currentPos.pos))
-        {
-            Drill(currentPos.pos);
-            // Skip this sample so it adds no color or opacity to the image.
+        // [FIX] Skip saved holes BEFORE density, lighting and color accumulation.
+        // This sample contributes no color or opacity, and the ray continues
+        // looking at material behind the hole. No texture writes happen here.
+        // Do not render this sample if its position has been drilled.
+        if (BeenDrilled(currPos))
             continue;
-        }
-        if (BeenDrilled(currentPos.pos))
-        {
-            //dont render if this position has been drilled
-            continue;
-        }
 
-        
-        
         // Perform slice culling (cross section plane)
 #ifdef CROSS_SECTION_ON
-        if(IsCutout(currentPos.pos))
+        if(IsCutout(currPos))
             continue;
 #endif
 
 #if CUBIC_INTERPOLATION_ON && !defined(MULTIVOLUME_OVERLAY) && !defined(MULTIVOLUME_ISOLATE)
         // Optimisation: First get density without tricubic interpolation, before doing an early return
-        if (getTF1DColour(getDensityNoTricubic(currentPos.pos)).a == 0.0)
+        if (getTF1DColour(getDensityNoTricubic(currPos)).a == 0.0)
             continue;
 #endif
 
         // Get the dansity/sample value of the current position
-        const float density = getDensity(currentPos.pos);
+        const float density = getDensity(currPos);
 
         // Apply visibility window
-        if (density < _MinVal || density > _MaxVal) continue;
+        if (density < _MinVal || density > _MaxVal)
+            continue;
 
         // Apply 1D transfer function
 #if !TF2D_ON
@@ -364,7 +336,7 @@ volrend_result volrend_dvr(float3 vertexLocal, float2 uv)
 #endif
 
 #if defined(MULTIVOLUME_OVERLAY) || defined(MULTIVOLUME_ISOLATE)
-        const float secondaryDensity = getSecondaryDensity(currentPos.pos);
+        const float secondaryDensity = getSecondaryDensity(currPos);
         float4 secondaryColour = getSecondaryTF1DColour(secondaryDensity);
 #if MULTIVOLUME_OVERLAY
         src = secondaryColour.a > 0.0 ? secondaryColour : src;
@@ -376,7 +348,7 @@ volrend_result volrend_dvr(float3 vertexLocal, float2 uv)
 
         // Calculate gradient (needed for lighting and 2D transfer functions)
 #if defined(TF2D_ON) || defined(LIGHTING_ON)
-        float3 gradient = getGradient(currentPos.pos);
+        float3 gradient = getGradient(currPos);
         float gradMag = length(gradient);
 
         float gradMagNorm = gradMag / 1.75f;
@@ -395,7 +367,7 @@ volrend_result volrend_dvr(float3 vertexLocal, float2 uv)
         float3 shaded = calculateLighting(src.rgb, gradient / gradMag, getLightDirection(-ray.direction), -ray.direction, 0.3f);
         src.rgb = lerp(src.rgb, shaded, factor);
 #if defined(SHADOWS_ON)
-        float shadow = calculateShadow(currentPos.pos, getLightDirection(-ray.direction));
+        float shadow = calculateShadow(currPos, getLightDirection(-ray.direction));
         src.rgb *= (1.0f - shadow);
 #endif
 #endif
@@ -406,7 +378,8 @@ volrend_result volrend_dvr(float3 vertexLocal, float2 uv)
         src.rgb *= src.a;
         col = (1.0f - col.a) * src + col;
 
-        if (col.a > 0.15 && t < tDepth) {
+        if (col.a > 0.15 && t < tDepth)
+        {
             tDepth = t;
         }
 
@@ -432,8 +405,8 @@ volrend_result volrend_dvr(float3 vertexLocal, float2 uv)
 // Maximum Intensity Projection mode
 volrend_result volrend_mip(float3 vertexLocal, float2 uv)
 {
-    #define MAX_NUM_STEPS 512
-    const int samplingRate = (int)(MAX_NUM_STEPS * _SamplingRateMultiplier);
+#define MAX_NUM_STEPS 512
+    const int samplingRate = (int) (MAX_NUM_STEPS * _SamplingRateMultiplier);
 
     RayInfo ray = getRayBack2Front(vertexLocal);
     RaymarchInfo raymarchInfo = initRaymarch(ray, samplingRate);
@@ -444,6 +417,11 @@ volrend_result volrend_mip(float3 vertexLocal, float2 uv)
     {
         const float t = iStep * raymarchInfo.numStepsRecip;
         const float3 currPos = lerp(ray.startPos, ray.endPos, t);
+
+        // [ADDED] MIP and Surface must respect the same saved holes as DVR.
+        // Do not render this sample if its position has been drilled.
+        if (BeenDrilled(currPos))
+            continue;
         
 #ifdef CROSS_SECTION_ON
         if (IsCutout(currPos))
@@ -462,7 +440,11 @@ volrend_result volrend_mip(float3 vertexLocal, float2 uv)
     volrend_result output;
     output.colour = float4(1.0f, 1.0f, 1.0f, maxDensity); // maximum intensity
 #if DEPTHWRITE_ON
-    output.depth = localToDepth(maxDensityPos - float3(0.5f, 0.5f, 0.5f));
+    // [FIX] If every sample was skipped, do not place the transparent pixel's
+    // depth at the front of the volume. Use the plugin's distant no-hit approach.
+    const float3 depthPos = maxDensity > 0.0f
+        ? maxDensityPos : lerp(ray.startPos, ray.endPos, 1000.0f);
+    output.depth = localToDepth(depthPos - float3(0.5f, 0.5f, 0.5f));
 #endif
     return output;
 }
@@ -471,8 +453,8 @@ volrend_result volrend_mip(float3 vertexLocal, float2 uv)
 // Draws the first point (closest to camera) with a density within the user-defined thresholds.
 volrend_result volrend_surf(float3 vertexLocal, float2 uv)
 {
-    #define MAX_NUM_STEPS 1024
-    const int samplingRate = (int)(MAX_NUM_STEPS * _SamplingRateMultiplier);
+#define MAX_NUM_STEPS 1024
+    const int samplingRate = (int) (MAX_NUM_STEPS * _SamplingRateMultiplier);
 
     RayInfo ray = getRayFront2Back(vertexLocal);
     RaymarchInfo raymarchInfo = initRaymarch(ray, samplingRate);
@@ -480,11 +462,19 @@ volrend_result volrend_surf(float3 vertexLocal, float2 uv)
     // Create a small random offset in order to remove artifacts
     ray.startPos = ray.startPos + (JITTER_FACTOR * ray.direction * raymarchInfo.stepSize) * getNoise(float2(uv.x, uv.y)).r;
 
-    float4 col = float4(0,0,0,0);
-    for (int iStep = 0; iStep < raymarchInfo.numSteps; iStep++)
+    float4 col = float4(0, 0, 0, 0);
+    // [FIX] Keep iStep in function scope: the depth calculation below uses it
+    // after the loop. Do not depend on compiler-specific for-loop scoping.
+    int iStep = 0;
+    for (; iStep < raymarchInfo.numSteps; iStep++)
     {
         const float t = iStep * raymarchInfo.numStepsRecip;
         const float3 currPos = lerp(ray.startPos, ray.endPos, t);
+
+        // [ADDED] MIP and Surface must respect the same saved holes as DVR.
+        // Do not render this sample if its position has been drilled.
+        if (BeenDrilled(currPos))
+            continue;
         
 #ifdef CROSS_SECTION_ON
         if (IsCutout(currPos))

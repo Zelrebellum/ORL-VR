@@ -18,17 +18,18 @@
         [HideInInspector] _ShadowVolumeTextureSize("Shadow volume dimensions", Vector) = (1, 1, 1)
         /*[HideInInspector]*/ _TextureSize("Dataset dimensions", Vector) = (1, 1, 1)
 
-        // ShaderTests.cs sends the drill sphere as four numbers "_DrillSpherrWorldPos" -----------------------------------------------------------------------------------------------------------
-        // x, y, z are the center in world coordinates; w is the world-space radius.
-        //[HideInInspector]
-        _DrillSpherrWorldPos("Drill Sphere world pos", Vector) = (0, 0, 0, 0)
+        // Removed _DrillSpherrWorldPos and _DrillEnabled from this material.
+        // The original center/radius explanations are preserved beside those inputs in Drilling.compute.
+        // The drill pose now goes to Drilling.compute; rendering reads its mask.
 
-        // ShaderTests.cs sets this to 1 when cutting is allowed and 0 when it is off. ------------------------------------------------------------------------------------------------------------
-        //[HideInInspector]
-        _DrillEnabled("Drill Enabled", Float) = 0   
+        // C# binds the initialized 3D RenderTexture here. The default white
+        // texture is only a fallback; it does NOT fill a new RenderTexture.
+        [HideInInspector] _VolumeMask("Persistent Drilling Mask", 3D) = "white" {}
 
-        _VolumeMask("3D Texture", 3D) = "white"{}
-}
+        // 0 = no initialized mask; 1 = use saved drilling history.
+        // This remains 1 when the drill stops, so old holes do not disappear.
+        [HideInInspector] _VolumeMaskEnabled("Volume Mask Enabled", Float) = 0
+    }
     SubShader
     {
         PackageRequirements { "com.unity.render-pipelines.universal" }
@@ -59,7 +60,11 @@
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #define UVR_RP_URP
-            #include "../Include/VolumeRendering.hlsl"
+
+            // Keep this include HERE in the rendering shader. The mask
+            // read and sample skipping live in this matching corrected file.
+            // Only Drilling.compute must stop including the rendering code.
+            #include "Packages/com.mlavik1.easyvolumerenderer/Runtime/Shaders/Include/VolumeRendering.hlsl"//"../Include/VolumeRendering.hlsl"
 
             #define AMBIENT_LIGHTING_FACTOR 0.2
             #define JITTER_FACTOR 5.0

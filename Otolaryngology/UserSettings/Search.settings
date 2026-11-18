@@ -14,7 +14,7 @@ scopes = {
 	"currentGroup.66F56946" = "all"
 	"picker_window_position_offset.00000000" = "-1018;296;841;550"
 	"picker_visibility_flags.00000000" = "0"
-	"picker_item_size.00000000" = "1"
+	"picker_item_size.00000000" = "32"
 	"picker_inspector.00000000" = "0"
 }
 providers = {
@@ -92,6 +92,10 @@ providers = {
 objectSelectors = {
 }
 recentSearches = [
+	"xri hap"
+	"ha"
+	"xri right ha"
+	"xri ri"
 	"texture input settings"
 	"texture input se"
 	"texture"
@@ -108,10 +112,6 @@ recentSearches = [
 	"right i"
 	"xri right"
 	"xri lef"
-	"xri left/po"
-	"xri right/"
-	"xri right ro"
-	"xri right "
 ]
 searchItemFavorites = [
 ]
